@@ -142,6 +142,7 @@ server <- function(input, output) {
     })
     
     output$minremain <- renderText({
+      req(is.null(tweetData$data) == FALSE)
         rate_limit() %>% 
             filter(query == "statuses/user_timeline") %>% 
             select(remaining) %>%
@@ -149,6 +150,7 @@ server <- function(input, output) {
     })
     
     output$cooldown <- renderText({
+      req(is.null(tweetData$data) == FALSE)
         rate_limit() %>% 
             filter(query == "statuses/user_timeline") %>% 
             mutate(minutes = round(reset_at - Sys.time(),0)) %>% 
