@@ -13,9 +13,7 @@ library(tidytext)
 library(rtweet)
 library(rsconnect)
 options(scipen = 999)
-rsconnect::setAccountInfo(name='andrewcouch', 
-                          token='8C28FA36532260D810C333EB59C3295C', 
-                          secret='227TksT00kD2UqFgVebUUjc3h3en0H8hgRVy1jGC')
+
 # Define UI for application that draws a histogram
 ui <- fluidPage(
     tags$h2("Sweetboard"),
@@ -86,8 +84,17 @@ ui <- fluidPage(
                                                                        "Retweets" = "retweet_count"),
                                                         selected = "favorite_count"))), 
                          plotOutput("tweetHighLow")),
+                tabPanel("Topic Modeling", value = 5,
+                         sliderInput(inputId = "topicmodels", 
+                                     label = "Amount of Topics", 
+                                     min = 2, max = 6, step  = 1, value = 4),
+                         selectInput("topicdivision", label = "Topic Division",
+                                     choices = list("Month" = "month","Biweekly" = "biweek", "Week" = "week", "Day" = "day"),
+                                     selected = "month"),
+                         plotOutput("LDA", height = 800),
+                         plotOutput("topicProbability", height = 800)),
                 tabPanel("Raw Data", 
-                         value = 5,
+                         value = 6,
                          tableOutput("rawdatatable"))
             )
         )
@@ -125,16 +132,16 @@ server <- function(input, output) {
     })
     
     observeEvent(input$file, {
-        tweetData$data <- read.csv(input$file$datapath, encoding = "UTF-8")
-        tweetData$data <- tweetData$data %>% 
+        tweetData$data <- read.csv(input$file$datapath, encoding = "UTF-8") #Reads in csv 
+        tweetData$data <- tweetData$data %>%  #Same string manipulations from twitter scraping 
             mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
             mutate(text = str_replace_all(text, "https:", "")) %>% 
             mutate(text = str_replace_all(text, "<[^>]+>", "")) 
     })
     
     output$tweethead <- renderTable({
-        req(is.null(tweetData$data) == FALSE)
-        tweetData$data %>% 
+        req(is.null(tweetData$data) == FALSE) #Prevents function from executing until tweets are scraped or uploaded
+        tweetData$data %>% #Outputs a glimpse of tweet text from uploaded or scraped tweets 
             select(`created_at`, `text`) %>% 
             mutate(`created_at` = as.character(`created_at`)) %>% 
             arrange() %>% 
@@ -142,16 +149,14 @@ server <- function(input, output) {
     })
     
     output$minremain <- renderText({
-      req(is.null(tweetData$data) == FALSE)
-        rate_limit() %>% 
+        rate_limit() %>% #Shows how many tweet requests a user can execute
             filter(query == "statuses/user_timeline") %>% 
             select(remaining) %>%
             paste("Requests Remaining")
     })
     
     output$cooldown <- renderText({
-      req(is.null(tweetData$data) == FALSE)
-        rate_limit() %>% 
+        rate_limit() %>% #Shows time left in the api until it resets for more scraping 
             filter(query == "statuses/user_timeline") %>% 
             mutate(minutes = round(reset_at - Sys.time(),0)) %>% 
             select(minutes) %>% 
@@ -159,7 +164,7 @@ server <- function(input, output) {
     })
     
     output$scrapedSummary <- renderTable({
-        req(is.null(tweetData$data) == FALSE)
+        req(is.null(tweetData$data) == FALSE) #Displays a summary of scraped tweets with general metrics 
         tweetData$data %>% 
             filter(is_retweet == "FALSE") %>% 
             select(favorite_count, retweet_count) %>% 
@@ -174,18 +179,16 @@ server <- function(input, output) {
                       TotalTweets = n())
     })
     
-    
     #Ngram Analysis
     
     output$ngramplot <- renderPlot({
-        req(is.null(tweetData$data) == FALSE)
+        req(is.null(tweetData$data) == FALSE) #Plot for ngram analysis 
         tweetData$data %>% 
             select(text) %>% 
-            mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
-            unnest_tokens("ngram", `text`, token = "ngrams", n = input$ngram) %>% 
-            filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% 
-            filter(str_detect(ngram, if_else(input$containword == "", " ", input$containword))) %>% 
-            filter(!str_detect(ngram, if_else(input$removestop == TRUE, paste(lexicon::sw_fry_100 ,collapse = '|'), "AAA"))) %>% 
+            unnest_tokens("ngram", `text`, token = "ngrams", n = input$ngram) %>% #Allows user to select the ngram 
+            filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% #Filters ngrams based off of a word
+            filter(str_detect(ngram, if_else(input$containword == "", "", input$containword))) %>% #Selects ngrams that contain a specifc word
+            filter(!str_detect(ngram, if_else(input$removestop == TRUE, paste(lexicon::sw_fry_100 ,collapse = '|'), "AAA"))) %>% #Removes ngrams that contain stop words 
             count(ngram) %>% 
             top_n(n, n = input$top) %>% 
             ggplot(aes(x = reorder(ngram, n), y = n, fill = ngram)) + 
@@ -206,13 +209,13 @@ server <- function(input, output) {
             unnest_tokens("ngram", `text`, token = "ngrams", n = input$ngram) %>% 
             mutate(key = row_number()) %>% 
             separate(`ngram`, into = "word") %>% 
-            filter(`word` == input$negationword) %>% 
+            filter(`word` == input$negationword) %>% #Selects ngrams that begin with an input word 
             select(key) %>% 
             inner_join(tweetData$data %>% 
                            select(text) %>% 
                            mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
                            unnest_tokens("ngram", `text`, token = "ngrams", n = input$ngram) %>% 
-                           mutate(key = row_number())) %>% 
+                           mutate(key = row_number())) %>% #Joins words with the input word
             select(ngram) %>% 
             count(ngram) %>% 
             top_n(n, n = input$top) %>% 
@@ -230,13 +233,13 @@ server <- function(input, output) {
     #Sentiment Analysis
     
     output$sentimentplot <- renderPlot({
-        req(is.null(tweetData$data) == FALSE)
+        req(is.null(tweetData$data) == FALSE) #Plots top n sentiment based off of user selected sentiment 
         tweetData$data %>% 
             select(text) %>% 
             mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
             unnest_tokens("word", `text`) %>% 
             filter(!word == input$filterword) %>% 
-            inner_join(get_sentiments(lexicon = input$lexicon)) %>% 
+            inner_join(get_sentiments(lexicon = input$lexicon)) %>% #Finds sentiment based on selected lexicon 
             rename(., "word" = 1, "sentiment" = 2) %>% 
             group_by(word, sentiment) %>% 
             count(sentiment) %>% 
@@ -257,7 +260,7 @@ server <- function(input, output) {
     })
     
     output$sentimenttime <- renderPlot({
-        req(is.null(tweetData$data) == FALSE)
+        req(is.null(tweetData$data) == FALSE) #Genearl sentiment timeseries with the BING lexicon 
         tweetData$data %>% 
             select(text, created_at) %>% 
             mutate(created_at = as.Date(created_at)) %>% 
@@ -289,22 +292,20 @@ server <- function(input, output) {
     })
     
     output$ngramsentiment <- renderPlot({
-        req(is.null(tweetData$data) == FALSE)
+        req(is.null(tweetData$data) == FALSE) #Finds top ngrams that contain sentiment words 
         tweetData$data %>% 
             select(text) %>% 
             mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
             unnest_tokens("ngram", `text`, token = "ngrams", n =input$ngram) %>% 
             filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% 
-            filter(str_detect(ngram, if_else(input$containword == "", " ", input$containword))) %>% 
             mutate(key = row_number()) %>% 
             unnest_tokens("word", "ngram") %>% 
             inner_join(get_sentiments(lexicon = "bing")) %>% 
-            inner_join(tweetData$data %>% 
+            inner_join(tweetData$data %>% #Filters sentiment based on an input word
                            select(text) %>% 
                            mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
                            unnest_tokens("ngram", `text`, token = "ngrams", n =input$ngram) %>% 
                            filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% 
-                           filter(str_detect(ngram, if_else(input$containword == "", " ", input$containword))) %>% 
                            mutate(key = row_number()), by = c("key" = "key")) %>% 
             select(-word) %>% 
             group_by(sentiment) %>% 
@@ -322,7 +323,7 @@ server <- function(input, output) {
     })
     
     output$sentimenttable <- renderTable({
-        req(is.null(tweetData$data) == FALSE)
+        req(is.null(tweetData$data) == FALSE) #Generates table displaying top n text and sentiment
         tweetData$data %>%
             filter(is_retweet == "FALSE") %>% 
             select(text, status_id) %>% 
@@ -342,7 +343,7 @@ server <- function(input, output) {
     #Tweet Metrics
     
     output$TweetMetricPlot <- renderPlot({
-        req(is.null(tweetData$data) == FALSE)
+        req(is.null(tweetData$data) == FALSE) #Creates timeseries displaying favorites, retweets, and daily tweets 
         tweetData$data %>% 
             filter(is_retweet == "FALSE") %>% 
             select(created_at, favorite_count, retweet_count) %>% 
@@ -366,7 +367,7 @@ server <- function(input, output) {
     })
     
     output$toptweets <- renderTable({
-        req(is.null(tweetData$data) == FALSE)
+        req(is.null(tweetData$data) == FALSE) #Creates table displaying top n tweets given tweet metric 
         tweetData$data %>% 
             filter(is_retweet == "FALSE") %>% 
             select(created_at, favorite_count, retweet_count, text) %>% 
@@ -381,7 +382,7 @@ server <- function(input, output) {
     })
     
     output$toptweetcommon <- renderPlot({
-        req(is.null(tweetData$data) == FALSE)
+        req(is.null(tweetData$data) == FALSE) #finds most frequent words given the top n tweets of a given metric 
         tweetData$data %>% 
             filter(is_retweet == "FALSE") %>% 
             select(favorite_count, retweet_count, text) %>% 
@@ -412,7 +413,7 @@ server <- function(input, output) {
     })
     
     output$mentionPlot <- renderPlot({
-        req(is.null(tweetData$data) == FALSE)
+        req(is.null(tweetData$data) == FALSE) #Counts mentions in tweets 
         tweetData$data %>% 
             filter(is_retweet == FALSE) %>% 
             select(text) %>% 
@@ -436,8 +437,8 @@ server <- function(input, output) {
     })
     
     output$metricDist <- renderPlot({
-        req(is.null(tweetData$data) == FALSE)
-        tweetData$data %>% 
+        req(is.null(tweetData$data) == FALSE) #Craetes groupings of words that contain and don't contain
+        tweetData$data %>%  #Plots metric distributions of the groupings 
             filter(is_retweet == "FALSE") %>% 
             select(text, favorite_count, retweet_count) %>% 
             mutate(text = str_to_lower(text)) %>% 
@@ -463,8 +464,8 @@ server <- function(input, output) {
     })
     
     output$tweetHighLow <- renderPlot({
-        req(is.null(tweetData$data) == FALSE)
-        tweetData$data %>% 
+        req(is.null(tweetData$data) == FALSE) #Creates two groupings of a percentile and remaining percentile
+        tweetData$data %>% #Weights ngrams by tf-idf and finds top n words for the 2 groupings
             filter(is_retweet == "FALSE") %>% 
             select(favorite_count, retweet_count, text) %>%
             gather(key = "type", value = "value", -text) %>% 
@@ -493,6 +494,84 @@ server <- function(input, output) {
             xlab("")
     })
     
+    #Topic Models 
+    
+    output$LDA <- renderPlot({
+        req(is.null(tweetData$data) == FALSE) #Creates n topics by a given time grouping (monthly, biweekly, weekly, daily)
+        tweetData$data %>% 
+            select(created_at, text) %>% 
+            mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
+            mutate(text = str_replace_all(text, "https:", "")) %>% 
+            mutate(text = str_replace_all(text, "<[^>]+>", "")) %>%
+            mutate(date = as_date(created_at)) %>%
+            mutate(month = paste(month(date), year(date), sep = "-"),
+                   day = paste(day(date), month(date), year(date), sep = "-"),
+                   week = week(date)) %>% 
+            mutate(biweek = round(week/2, 0)) %>% 
+            select(-created_at) %>% 
+            gather(key = "key", value = "value", -text) %>%
+            filter(key == paste(input$topicdivision)) %>% 
+            unnest_tokens("ngram", "text", token = "ngrams", n = input$ngram) %>% 
+            filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% 
+            filter(!str_detect(ngram, if_else(input$removestop == TRUE, paste(lexicon::sw_fry_100 ,collapse = '|'), "AAA"))) %>% 
+            select(-key) %>% 
+            group_by(value) %>% 
+            count(ngram) %>% 
+            cast_dtm(value, ngram, n) %>% 
+            LDA(k = input$topicmodels) %>% 
+            tidy() %>% 
+            group_by(topic) %>% 
+            top_n(beta, n = input$top) %>%
+            ggplot(aes(x = reorder_within(term, beta, topic), y = beta, fill = topic %>% as.factor())) + 
+            geom_col() + 
+            coord_flip() + 
+            scale_x_reordered() + 
+            facet_wrap(~topic, scales = "free") +
+            theme(legend.position = "none",
+                  axis.text.y = element_text(size = 25),
+                  axis.text.x = element_text(size = 15),
+                  strip.text = element_text(size=15)) +
+            xlab(label = "") + 
+            ylab(label = "")
+    })
+    
+    output$topicProbability <- renderPlot({
+        req(is.null(tweetData$data) == FALSE) #Uses topics to display topic probabilities for the given time groupings 
+        tweetData$data %>%
+            select(created_at, text) %>% 
+            mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
+            mutate(text = str_replace_all(text, "https:", "")) %>% 
+            mutate(text = str_replace_all(text, "<[^>]+>", "")) %>%
+            mutate(date = as_date(created_at)) %>%
+            mutate(month = paste(month(date), year(date), sep = "-"),
+                   day = paste(day(date), month(date), year(date), sep = "-"),
+                   week = week(date)) %>% 
+            mutate(biweek = round(week/2, 0)) %>% 
+            select(-created_at) %>% 
+            gather(key = "key", value = "value", -text) %>%
+            filter(key == paste(input$topicdivision)) %>% 
+            unnest_tokens("ngram", "text", token = "ngrams", n = 2) %>% 
+            filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% 
+            filter(!str_detect(ngram, if_else(input$removestop == TRUE, paste(lexicon::sw_fry_100 ,collapse = '|'), "AAA"))) %>% 
+            select(-key) %>% 
+            group_by(value) %>% 
+            count(ngram) %>% 
+            cast_dtm(value, ngram, n) %>% 
+            LDA(k = input$topicmodels) %>% 
+            tidy(matrix = "gamma") %>% 
+            mutate(topic = as.factor(topic)) %>% 
+            group_by(document, topic) %>%
+            ggplot(aes(x = document, y = gamma, color = topic)) + 
+            geom_point(size = 4) + 
+            geom_segment(aes(xend = document, yend = 0, y = gamma, x = document)) + 
+            facet_wrap(~topic, scales = "free") +
+            theme(legend.position = "none",
+                  axis.text.y = element_text(size = 20),
+                  axis.text.x = element_text(size = 20),
+                  strip.text = element_text(size=15)) +
+            xlab(label = "") + 
+            ylab(label = "")
+    })
     #Raw Data
     
     output$rawdatatable <- renderTable({
