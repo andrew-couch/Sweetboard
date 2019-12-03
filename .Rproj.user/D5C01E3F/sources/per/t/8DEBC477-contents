@@ -16,7 +16,8 @@ options(scipen = 999)
 
 # Define UI for application that draws a histogram
 ui <- fluidPage(
-    tags$h2("Sweetboard"),
+    h1(tags$div(class="header", checked=NA,
+                tags$a(href="https://github.com/andrew-couch/Sweetboard", "Sweetboard"))),
     p("Sentiment + Tweet Analytics Dashboard"),
     sidebarLayout(
         sidebarPanel(
