@@ -12,7 +12,7 @@ options(shiny.launch.browser = .rs.invokePlumberWindowViewer)
 
 ui <- fluidPage(
   h1(tags$div(class="header", checked=NA,
-              tags$a(href="shiny.rstudio.com/tutorial", "Sweetboard"))),
+              tags$a(href="https://github.com/andrew-couch/Sweetboard", "Sweetboard"))),
   h3("Sentiment + Tweet Analytics Dashboard"),
   h4("Developed by Andrew Couch"),
   
