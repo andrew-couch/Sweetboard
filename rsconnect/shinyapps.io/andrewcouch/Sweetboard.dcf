@@ -5,8 +5,6 @@ account: andrewcouch
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 1475027
-bundleId: 2634907
+bundleId: 2804969
 url: https://andrewcouch.shinyapps.io/Sweetboard/
-when: 1575352472.07412
-asMultiple: FALSE
-asStatic: FALSE
+when: 1581891052.15513

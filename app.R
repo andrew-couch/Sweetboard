@@ -6,12 +6,10 @@
 #
 #    http://shiny.rstudio.com/
 #
-
 library(shiny)
 library(tidyverse)
 library(tidytext)
 library(rtweet)
-library(rsconnect)
 library(lexicon)
 library(lubridate)
 library(topicmodels)
@@ -134,7 +132,6 @@ ui <- fluidPage(
 
 # Define server logic
 server <- function(input, output, session) {
-    token <- reactiveValues(data = NULL)
     tweetData <- reactiveValues(data = NULL)
     
     
@@ -182,6 +179,24 @@ server <- function(input, output, session) {
                              end = max((tweetData$data$created_at)),
                              min = min((tweetData$data$created_at)),
                              max = max((tweetData$data$created_at)))
+        output$minremain <- renderText({
+          req(is.null(token) == FALSE)
+          suppressWarnings()
+          rate_limit() %>% #Shows how many tweet requests a user can execute
+            filter(query == "statuses/user_timeline") %>% 
+            select(remaining) %>%
+            paste("Requests Remaining")
+        })
+        
+        output$cooldown <- renderText({
+          req(is.null(token) == FALSE)
+          suppressWarnings()
+          rate_limit() %>% #Shows time left in the api until it resets for more scraping 
+            filter(query == "statuses/user_timeline") %>% 
+            mutate(minutes = round(reset_at - Sys.time(),0)) %>% 
+            select(minutes) %>% 
+            paste("minutes until reset")
+        })
     })
     
     output$tweethead <- renderTable({
@@ -193,22 +208,7 @@ server <- function(input, output, session) {
             head()
     })
     
-    output$minremain <- renderText({
-      req(is.null(token) == FALSE)
-      rate_limit() %>% #Shows how many tweet requests a user can execute
-            filter(query == "statuses/user_timeline") %>% 
-            select(remaining) %>%
-            paste("Requests Remaining")
-    })
     
-    output$cooldown <- renderText({
-      req(is.null(token) == FALSE)
-      rate_limit() %>% #Shows time left in the api until it resets for more scraping 
-            filter(query == "statuses/user_timeline") %>% 
-            mutate(minutes = round(reset_at - Sys.time(),0)) %>% 
-            select(minutes) %>% 
-            paste("minutes until reset")
-    })
     
     output$scrapedSummary <- renderTable({
         req(is.null(tweetData$data) == FALSE) #Displays a summary of scraped tweets with general metrics 
@@ -625,7 +625,7 @@ server <- function(input, output, session) {
           y = gamma,
           x = document
         )) +
-        scale_y_continuous(labels = scales::percent) + 
+        scale_y_continuous(labels = percent) + 
         coord_flip() + 
         facet_wrap( ~ topic, scales = "free") +
         theme(
