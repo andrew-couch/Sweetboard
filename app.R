@@ -12,13 +12,21 @@ library(tidyverse)
 library(tidytext)
 library(rtweet)
 library(rsconnect)
+library(lexicon)
+library(lubridate)
+library(topicmodels)
+library(scales)
+
 options(scipen = 999)
 
-# Define UI for application that draws a histogram
+# Define UI for application
 ui <- fluidPage(
-    h1(tags$div(class="header", checked=NA,
-                tags$a(href="https://github.com/andrew-couch/Sweetboard", "Sweetboard"))),
-    p("Sentiment + Tweet Analytics Dashboard"),
+  h1(tags$div(class="header", checked=NA,
+              tags$a(href="https://github.com/andrew-couch/Sweetboard", "Sweetboard"))),
+  h3("Sentiment + Tweet Analytics Dashboard"),
+  h4("Developed by Andrew Couch"),
+  
+  
     sidebarLayout(
         sidebarPanel(
             style = "position:fixed;width:20%;",
@@ -29,8 +37,12 @@ ui <- fluidPage(
             textInput("containword", "Ngram contains...", ""),
             textInput("negationword", "Negation word", "not"),
             checkboxInput("removestop", "Remove Stop Words", value = FALSE)),
+        
+        
         mainPanel(
             tabsetPanel(
+              
+              
                 tabPanel("Tweet Data",
                          value = 1,
                          fluidRow(column(3,
@@ -51,10 +63,14 @@ ui <- fluidPage(
                                          textInput("accesstoken", "Access Token", value = ""),textInput("accesssecret", "Access Secret", value = ""),
                                          textOutput("minremain"),
                                          textOutput("cooldown")))),
+                
+                
                 tabPanel("Ngram Analysis",
                          value = 2,
                          plotOutput("ngramplot"), 
                          plotOutput("ngramnegation")),
+                
+                
                 tabPanel("Sentiment Analysis", 
                          value = 3,
                          selectInput("lexicon", label = h3("Select Lexicon"),
@@ -64,6 +80,8 @@ ui <- fluidPage(
                          plotOutput("ngramsentiment", height = 500),
                          plotOutput("sentimenttime", height = 500),
                          tableOutput("sentimenttable")),
+                
+                
                 tabPanel("Tweet Metrics", 
                          value = 4,
                          plotOutput("TweetMetricPlot", height = 700), 
@@ -85,15 +103,27 @@ ui <- fluidPage(
                                                                        "Retweets" = "retweet_count"),
                                                         selected = "favorite_count"))), 
                          plotOutput("tweetHighLow")),
+                
+                
                 tabPanel("Topic Modeling", value = 5,
                          sliderInput(inputId = "topicmodels", 
                                      label = "Amount of Topics", 
                                      min = 2, max = 6, step  = 1, value = 4),
+                         dateRangeInput(inputId = "dateRange",
+                                        label = "Date Range",
+                                        start = Sys.Date()-10, 
+                                        end =  Sys.Date()+10,
+                                        min = Sys.Date()-10, 
+                                        max =  Sys.Date()+10,
+                                        format = "mm/dd/yy",
+                                        sep = " - "),
                          selectInput("topicdivision", label = "Topic Division",
                                      choices = list("Month" = "month","Biweekly" = "biweek", "Week" = "week", "Day" = "day"),
                                      selected = "month"),
                          plotOutput("LDA", height = 800),
                          plotOutput("topicProbability", height = 800)),
+                
+                
                 tabPanel("Raw Data", 
                          value = 6,
                          tableOutput("rawdatatable"))
@@ -102,9 +132,9 @@ ui <- fluidPage(
     )
 )
 
-# Define server logic required to draw a histogram
-server <- function(input, output) {
-    
+# Define server logic
+server <- function(input, output, session) {
+    token <- reactiveValues(data = NULL)
     tweetData <- reactiveValues(data = NULL)
     
     
@@ -129,7 +159,14 @@ server <- function(input, output) {
         tweetData$data <- tweetData$data %>% 
             mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
             mutate(text = str_replace_all(text, "https:", "")) %>% 
-            mutate(text = str_replace_all(text, "<[^>]+>", "")) 
+            mutate(text = str_replace_all(text, "<[^>]+>", ""),
+                   created_at = as_date(created_at)) 
+        updateDateRangeInput(session, 
+                             inputId = "dateRange", 
+                             start = min(tweetData$data$created_at),
+                             end = max((tweetData$data$created_at)),
+                             min = min((tweetData$data$created_at)),
+                             max = max((tweetData$data$created_at)))
     })
     
     observeEvent(input$file, {
@@ -137,7 +174,14 @@ server <- function(input, output) {
         tweetData$data <- tweetData$data %>%  #Same string manipulations from twitter scraping 
             mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
             mutate(text = str_replace_all(text, "https:", "")) %>% 
-            mutate(text = str_replace_all(text, "<[^>]+>", "")) 
+            mutate(text = str_replace_all(text, "<[^>]+>", ""),
+                   created_at = as_date(created_at)) 
+        updateDateRangeInput(session, 
+                             inputId = "dateRange", 
+                             start = min(tweetData$data$created_at),
+                             end = max((tweetData$data$created_at)),
+                             min = min((tweetData$data$created_at)),
+                             max = max((tweetData$data$created_at)))
     })
     
     output$tweethead <- renderTable({
@@ -150,14 +194,16 @@ server <- function(input, output) {
     })
     
     output$minremain <- renderText({
-        rate_limit() %>% #Shows how many tweet requests a user can execute
+      req(is.null(token) == FALSE)
+      rate_limit() %>% #Shows how many tweet requests a user can execute
             filter(query == "statuses/user_timeline") %>% 
             select(remaining) %>%
             paste("Requests Remaining")
     })
     
     output$cooldown <- renderText({
-        rate_limit() %>% #Shows time left in the api until it resets for more scraping 
+      req(is.null(token) == FALSE)
+      rate_limit() %>% #Shows time left in the api until it resets for more scraping 
             filter(query == "statuses/user_timeline") %>% 
             mutate(minutes = round(reset_at - Sys.time(),0)) %>% 
             select(minutes) %>% 
@@ -498,32 +544,39 @@ server <- function(input, output) {
     #Topic Models 
     
     output$LDA <- renderPlot({
-        req(is.null(tweetData$data) == FALSE) #Creates n topics by a given time grouping (monthly, biweekly, weekly, daily)
-        tweetData$data %>% 
-            select(created_at, text) %>% 
-            mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
-            mutate(text = str_replace_all(text, "https:", "")) %>% 
-            mutate(text = str_replace_all(text, "<[^>]+>", "")) %>%
-            mutate(date = as_date(created_at)) %>%
-            mutate(month = paste(month(date), year(date), sep = "-"),
-                   day = paste(day(date), month(date), year(date), sep = "-"),
-                   week = week(date)) %>% 
-            mutate(biweek = round(week/2, 0)) %>% 
-            select(-created_at) %>% 
-            gather(key = "key", value = "value", -text) %>%
-            filter(key == paste(input$topicdivision)) %>% 
-            unnest_tokens("ngram", "text", token = "ngrams", n = input$ngram) %>% 
-            filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% 
-            filter(!str_detect(ngram, if_else(input$removestop == TRUE, paste(lexicon::sw_fry_100 ,collapse = '|'), "AAA"))) %>% 
-            select(-key) %>% 
-            group_by(value) %>% 
-            count(ngram) %>% 
-            cast_dtm(value, ngram, n) %>% 
-            LDA(k = input$topicmodels) %>% 
-            tidy() %>% 
-            group_by(topic) %>% 
-            top_n(beta, n = input$top) %>%
-            ggplot(aes(x = reorder_within(term, beta, topic), y = beta, fill = topic %>% as.factor())) + 
+        
+      req(is.null(tweetData$data) == FALSE) #Creates n topics by a given time grouping (monthly, biweekly, weekly, daily)
+      
+      #Format/wrangle the data for topic modeling   
+      topicmodelData <- tweetData$data %>% 
+        filter(created_at >= input$dateRange[1] & created_at <= input$dateRange[2]) %>% 
+        select(created_at, text) %>% 
+          mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
+          mutate(text = str_replace_all(text, "https:", "")) %>% 
+          mutate(text = str_replace_all(text, "<[^>]+>", "")) %>%
+          mutate(date = as_date(created_at)) %>%
+          mutate(month = paste(month(date), year(date), sep = "-"),
+                 day = paste(day(date), month(date), year(date), sep = "-"),
+                 week = week(date)) %>% 
+          mutate(biweek = round(week/2, 0)) %>% 
+          select(-created_at) %>% 
+          gather(key = "key", value = "value", -text) %>%
+          filter(key == paste(input$topicdivision)) %>% 
+          unnest_tokens("ngram", "text", token = "ngrams", n = input$ngram) %>% 
+          filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% 
+          filter(!str_detect(ngram, if_else(input$removestop == TRUE, paste(lexicon::sw_fry_100 ,collapse = '|'), "AAA"))) %>% 
+          select(-key) %>% 
+          group_by(value) %>% 
+          count(ngram) %>% 
+          cast_dtm(value, ngram, n) 
+        
+      #Create the topic model and chart the output
+      topicmodelData %>% 
+          LDA(k = input$topicmodels) %>% 
+          tidy() %>% 
+          group_by(topic) %>% 
+          top_n(beta, n = input$top) %>% 
+          ggplot(aes(x = reorder_within(term, beta, topic), y = beta, fill = topic %>% as.factor())) + 
             geom_col() + 
             coord_flip() + 
             scale_x_reordered() + 
@@ -536,45 +589,54 @@ server <- function(input, output) {
             ylab(label = "")
     })
     
+    #output the topic model's probabilities 
     output$topicProbability <- renderPlot({
         req(is.null(tweetData$data) == FALSE) #Uses topics to display topic probabilities for the given time groupings 
-        tweetData$data %>%
-            select(created_at, text) %>% 
-            mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
-            mutate(text = str_replace_all(text, "https:", "")) %>% 
-            mutate(text = str_replace_all(text, "<[^>]+>", "")) %>%
-            mutate(date = as_date(created_at)) %>%
-            mutate(month = paste(month(date), year(date), sep = "-"),
-                   day = paste(day(date), month(date), year(date), sep = "-"),
-                   week = week(date)) %>% 
-            mutate(biweek = round(week/2, 0)) %>% 
-            select(-created_at) %>% 
-            gather(key = "key", value = "value", -text) %>%
-            filter(key == paste(input$topicdivision)) %>% 
-            unnest_tokens("ngram", "text", token = "ngrams", n = 2) %>% 
-            filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% 
-            filter(!str_detect(ngram, if_else(input$removestop == TRUE, paste(lexicon::sw_fry_100 ,collapse = '|'), "AAA"))) %>% 
-            select(-key) %>% 
-            group_by(value) %>% 
-            count(ngram) %>% 
-            cast_dtm(value, ngram, n) %>% 
-            LDA(k = input$topicmodels) %>% 
-            tidy(matrix = "gamma") %>% 
-            mutate(topic = as.factor(topic)) %>% 
-            group_by(document, topic) %>%
-            ggplot(aes(x = document, y = gamma, color = topic)) + 
-            geom_point(size = 4) + 
-            geom_segment(aes(xend = document, yend = 0, y = gamma, x = document)) + 
-            facet_wrap(~topic, scales = "free") +
-            theme(legend.position = "none",
-                  axis.text.y = element_text(size = 20),
-                  axis.text.x = element_text(size = 20),
-                  strip.text = element_text(size=15)) +
-            xlab(label = "") + 
-            ylab(label = "")
+      tweetData$data %>% 
+        filter(created_at >= input$dateRange[1] & created_at <= input$dateRange[2]) %>% 
+        select(created_at, text) %>% 
+        mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
+        mutate(text = str_replace_all(text, "https:", "")) %>% 
+        mutate(text = str_replace_all(text, "<[^>]+>", "")) %>%
+        mutate(date = as_date(created_at)) %>%
+        mutate(month = paste(month(date), year(date), sep = "-"),
+               day = paste(day(date), month(date), year(date), sep = "-"),
+               week = week(date)) %>% 
+        mutate(biweek = round(week/2, 0)) %>% 
+        select(-created_at) %>% 
+        gather(key = "key", value = "value", -text) %>%
+        filter(key == paste(input$topicdivision)) %>% 
+        unnest_tokens("ngram", "text", token = "ngrams", n = input$ngram) %>% 
+        filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% 
+        filter(!str_detect(ngram, if_else(input$removestop == TRUE, paste(lexicon::sw_fry_100 ,collapse = '|'), "AAA"))) %>% 
+        select(-key) %>% 
+        group_by(value) %>% 
+        count(ngram) %>% 
+        cast_dtm(value, ngram, n) %>% 
+        LDA(k = input$topicmodels) %>%
+        tidy(matrix = "gamma") %>%
+        mutate(topic = as.factor(topic)) %>%
+        group_by(document, topic) %>%
+        ggplot(aes(x = reorder(document, as.numeric(document)), y = gamma, color = topic)) +
+        geom_point(size = 4) +
+        geom_segment(aes(
+          xend = document,
+          yend = 0,
+          y = gamma,
+          x = document
+        )) +
+        scale_y_continuous(labels = scales::percent) + 
+        coord_flip() + 
+        facet_wrap( ~ topic, scales = "free") +
+        theme(
+          legend.position = "none",
+          axis.text.y = element_text(size = 20),
+          axis.text.x = element_text(size = 20),
+          strip.text = element_text(size = 15)) +
+        xlab(label = "") +
+        ylab(label = "")
     })
     #Raw Data
-    
     output$rawdatatable <- renderTable({
         tweetData$data %>% 
             select(created_at,

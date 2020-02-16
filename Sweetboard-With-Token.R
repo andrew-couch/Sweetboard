@@ -2,8 +2,12 @@ library(shiny)
 library(tidyverse)
 library(tidytext)
 library(rtweet)
+library(rsconnect)
+library(lexicon)
 library(lubridate)
 library(topicmodels)
+library(scales)
+
 
 rm(list = ls())
 get_token()
@@ -95,6 +99,14 @@ ui <- fluidPage(
                sliderInput(inputId = "topicmodels", 
                            label = "Amount of Topics", 
                            min = 2, max = 6, step  = 1, value = 4),
+               dateRangeInput(inputId = "dateRange",
+                              label = "Date Range",
+                              start = Sys.Date()-10, 
+                              end =  Sys.Date()+10,
+                              min = Sys.Date()-10, 
+                              max =  Sys.Date()+10,
+                              format = "mm/dd/yy",
+                              sep = " - "),
                selectInput("topicdivision", label = "Topic Division",
                            choices = list("Month" = "month","Biweekly" = "biweek", "Week" = "week", "Day" = "day"),
                            selected = "month"),
@@ -102,18 +114,15 @@ ui <- fluidPage(
                plotOutput("topicProbability", height = 800)),
 
       
-      tabPanel("Tweet Sampling", value = 6),
-      
-      
       tabPanel("Raw Data", 
-               value = 7,
+               value = 6,
                DT::dataTableOutput("rawdatatable"))
     )
   )
 )
 )
 
-server <- function(input, output) {
+server <- function(input, output, session) {
  
   tweetData <- reactiveValues(data = NULL) #Set as null so tweetData can receive scraped or uploaded tweets
 
@@ -134,7 +143,14 @@ server <- function(input, output) {
     tweetData$data <- tweetData$data %>% 
       mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% #Cleans the text by switching twitter links with the word 'link'
       mutate(text = str_replace_all(text, "https:", "")) %>% 
-      mutate(text = str_replace_all(text, "<[^>]+>", "")) 
+      mutate(text = str_replace_all(text, "<[^>]+>", ""),
+             created_at = as_date(created_at)) 
+    updateDateRangeInput(session, 
+                         inputId = "dateRange", 
+                         start = min(tweetData$data$created_at),
+                         end = max((tweetData$data$created_at)),
+                         min = min((tweetData$data$created_at)),
+                         max = max((tweetData$data$created_at)))
   })
 
   observeEvent(input$file, {
@@ -142,7 +158,14 @@ server <- function(input, output) {
     tweetData$data <- tweetData$data %>%  #Same string manipulations from twitter scraping 
       mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
       mutate(text = str_replace_all(text, "https:", "")) %>% 
-      mutate(text = str_replace_all(text, "<[^>]+>", "")) 
+      mutate(text = str_replace_all(text, "<[^>]+>", ""),
+             created_at = as_date(created_at)) 
+    updateDateRangeInput(session, 
+                         inputId = "dateRange", 
+                         start = min(tweetData$data$created_at),
+                         end = max((tweetData$data$created_at)),
+                         min = min((tweetData$data$created_at)),
+                         max = max((tweetData$data$created_at)))
   })
   
   output$tweethead <- renderTable({
@@ -503,8 +526,56 @@ server <- function(input, output) {
   #Topic Models 
   
   output$LDA <- renderPlot({
+    
     req(is.null(tweetData$data) == FALSE) #Creates n topics by a given time grouping (monthly, biweekly, weekly, daily)
+    
+    #Format/wrangle the data for topic modeling   
+    topicmodelData <- tweetData$data %>% 
+      filter(created_at >= input$dateRange[1] & created_at <= input$dateRange[2]) %>% 
+      select(created_at, text) %>% 
+      mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
+      mutate(text = str_replace_all(text, "https:", "")) %>% 
+      mutate(text = str_replace_all(text, "<[^>]+>", "")) %>%
+      mutate(date = as_date(created_at)) %>%
+      mutate(month = paste(month(date), year(date), sep = "-"),
+             day = paste(day(date), month(date), year(date), sep = "-"),
+             week = week(date)) %>% 
+      mutate(biweek = round(week/2, 0)) %>% 
+      select(-created_at) %>% 
+      gather(key = "key", value = "value", -text) %>%
+      filter(key == paste(input$topicdivision)) %>% 
+      unnest_tokens("ngram", "text", token = "ngrams", n = input$ngram) %>% 
+      filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% 
+      filter(!str_detect(ngram, if_else(input$removestop == TRUE, paste(lexicon::sw_fry_100 ,collapse = '|'), "AAA"))) %>% 
+      select(-key) %>% 
+      group_by(value) %>% 
+      count(ngram) %>% 
+      cast_dtm(value, ngram, n) 
+    
+    #Create the topic model and chart the output
+    topicmodelData %>% 
+      LDA(k = input$topicmodels) %>% 
+      tidy() %>% 
+      group_by(topic) %>% 
+      top_n(beta, n = input$top) %>% 
+      ggplot(aes(x = reorder_within(term, beta, topic), y = beta, fill = topic %>% as.factor())) + 
+      geom_col() + 
+      coord_flip() + 
+      scale_x_reordered() + 
+      facet_wrap(~topic, scales = "free") +
+      theme(legend.position = "none",
+            axis.text.y = element_text(size = 25),
+            axis.text.x = element_text(size = 15),
+            strip.text = element_text(size=15)) +
+      xlab(label = "") + 
+      ylab(label = "")
+  })
+  
+  #output the topic model's probabilities 
+  output$topicProbability <- renderPlot({
+    req(is.null(tweetData$data) == FALSE) #Uses topics to display topic probabilities for the given time groupings 
     tweetData$data %>% 
+      filter(created_at >= input$dateRange[1] & created_at <= input$dateRange[2]) %>% 
       select(created_at, text) %>% 
       mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
       mutate(text = str_replace_all(text, "https:", "")) %>% 
@@ -524,61 +595,29 @@ server <- function(input, output) {
       group_by(value) %>% 
       count(ngram) %>% 
       cast_dtm(value, ngram, n) %>% 
-      LDA(k = input$topicmodels) %>% 
-      tidy() %>% 
-      group_by(topic) %>% 
-      top_n(beta, n = input$top) %>%
-      ggplot(aes(x = reorder_within(term, beta, topic), y = beta, fill = topic %>% as.factor())) + 
-      geom_col() + 
-      coord_flip() + 
-      scale_x_reordered() + 
-      facet_wrap(~topic, scales = "free") +
-      theme(legend.position = "none",
-            axis.text.y = element_text(size = 25),
-            axis.text.x = element_text(size = 15),
-            strip.text = element_text(size=15)) +
-      xlab(label = "") + 
-      ylab(label = "")
-  })
-  
-  output$topicProbability <- renderPlot({
-    req(is.null(tweetData$data) == FALSE) #Uses topics to display topic probabilities for the given time groupings 
-    tweetData$data %>%
-      select(created_at, text) %>% 
-      mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
-      mutate(text = str_replace_all(text, "https:", "")) %>% 
-      mutate(text = str_replace_all(text, "<[^>]+>", "")) %>%
-      mutate(date = as_date(created_at)) %>%
-      mutate(month = paste(month(date), year(date), sep = "-"),
-             day = paste(day(date), month(date), year(date), sep = "-"),
-             week = week(date)) %>% 
-      mutate(biweek = round(week/2, 0)) %>% 
-      select(-created_at) %>% 
-      gather(key = "key", value = "value", -text) %>%
-      filter(key == paste(input$topicdivision)) %>% 
-      unnest_tokens("ngram", "text", token = "ngrams", n = 2) %>% 
-      filter(!str_detect(`ngram`, if_else(input$filterword == "", " AAA ", input$filterword))) %>% 
-      filter(!str_detect(ngram, if_else(input$removestop == TRUE, paste(lexicon::sw_fry_100 ,collapse = '|'), "AAA"))) %>% 
-      select(-key) %>% 
-      group_by(value) %>% 
-      count(ngram) %>% 
-      cast_dtm(value, ngram, n) %>% 
-      LDA(k = input$topicmodels) %>% 
-      tidy(matrix = "gamma") %>% 
-      mutate(topic = as.factor(topic)) %>% 
+      LDA(k = input$topicmodels) %>%
+      tidy(matrix = "gamma") %>%
+      mutate(topic = as.factor(topic)) %>%
       group_by(document, topic) %>%
-      ggplot(aes(x = document, y = gamma, color = topic)) + 
-      geom_point(size = 4) + 
-      geom_segment(aes(xend = document, yend = 0, y = gamma, x = document)) + 
-      facet_wrap(~topic, scales = "free") +
-      theme(legend.position = "none",
-            axis.text.y = element_text(size = 20),
-            axis.text.x = element_text(size = 20),
-            strip.text = element_text(size=15)) +
-      xlab(label = "") + 
+      ggplot(aes(x = reorder(document, as.numeric(document)), y = gamma, color = topic)) +
+      geom_point(size = 4) +
+      geom_segment(aes(
+        xend = document,
+        yend = 0,
+        y = gamma,
+        x = document
+      )) +
+      scale_y_continuous(labels = scales::percent) + 
+      coord_flip() + 
+      facet_wrap( ~ topic, scales = "free") +
+      theme(
+        legend.position = "none",
+        axis.text.y = element_text(size = 20),
+        axis.text.x = element_text(size = 20),
+        strip.text = element_text(size = 15)) +
+      xlab(label = "") +
       ylab(label = "")
   })
-  
   #Raw Data
   
   output$rawdatatable <- DT::renderDataTable({
@@ -597,32 +636,3 @@ shinyApp(ui = ui, server = server)
 
 
 #Testing Environemnt 
-df <- read.csv("tweets.csv", stringsAsFactors = FALSE, encoding = "UTF-8")
-
-
-df %>% 
-  select(created_at, text) %>% 
-  mutate(text = str_replace_all(text, "(//t.co/)(.*)", " Link")) %>% 
-  mutate(text = str_replace_all(text, "https:", "")) %>% 
-  mutate(text = str_replace_all(text, "<[^>]+>", "")) %>%
-  mutate(date = as_date(created_at)) %>%
-  mutate(month = paste(month(date), year(date), sep = "-"),
-         day = paste(day(date), month(date), year(date), sep = "-"),
-         week = week(date)) %>% 
-  select(-created_at) %>% 
-  gather(key = "key", value = "value", -text) %>%
-  filter(key == "day") %>% 
-  unnest_tokens("word", "text", token = "ngrams", n = 2) %>% 
-  select(-key) %>% 
-  group_by(value) %>% 
-  count(word) %>% 
-  cast_dtm(value, word, n) %>% 
-  topicmodels::LDA(k = 4) %>% 
-  tidy() %>% 
-  group_by(topic) %>% 
-  top_n(beta, n = 5) %>%
-  ggplot(aes(x = reorder_within(term, beta, topic), y = beta, fill = topic %>% as.factor())) + 
-  geom_col() + 
-  coord_flip() + 
-  scale_x_reordered() + 
-  facet_wrap(~topic, scales = "free")
