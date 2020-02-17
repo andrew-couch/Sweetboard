@@ -1,3 +1,4 @@
+## ![size](https://img.shields.io/github/repo-size/andrew-couch/Sweetboard) ![twitter](https://img.shields.io/twitter/follow/andrewcouchnews?style=social)
 # Sweetboard
 ## Dashboard for conducting sentiment analysis, text mining, and other analyses on Twitter data
 ### [Demonstration Video](https://youtu.be/M26o-RizrUA)
